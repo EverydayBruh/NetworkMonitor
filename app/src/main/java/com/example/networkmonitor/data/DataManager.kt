@@ -7,9 +7,13 @@ import java.io.File
 import java.io.FileReader
 import java.io.IOException
 import java.io.InputStreamReader
+import kotlinx.coroutines.delay
+import com.example.networkmonitor.models.CapturedFile
 
 object DataManager {
     private const val CHROOT_PATH = "chroot /data/local/nhsystem/kali-arm64 /bin/sh -c 'export PATH=/usr/sbin:/usr/bin:/sbin:/bin && export LC_ALL=C.UTF-8 &&"
+    private const val CAPTIONS_DIR = "/NetworkMonitor/Captions/"
+    private const val HANDSHAKES_DIR = "/NetworkMonitor/Handshakes/"
 
     fun runCustomCommand(command: String, updateStatus: (String, String) -> Unit) {
         updateStatus("Status: Running Command", "")
@@ -17,16 +21,65 @@ object DataManager {
         executeCommand(fullCommand, updateStatus)
     }
 
-    fun runKillAndStartMonitorMode(updateStatus: (String, String) -> Unit) {
-        updateStatus("Status: Killing Processes", "")
-        val killCommand = "$CHROOT_PATH airmon-ng check kill'"
-        val startMonitorModeCommand = "$CHROOT_PATH airmon-ng start wlan0'"
+    suspend fun getCapturedFiles(): List<File> {
+        // Здесь должна быть реальная логика получения списка файлов
+        return File(HANDSHAKES_DIR).listFiles()?.filter { it.extension == "cap" } ?: emptyList()
+    }
 
-        executeCommand(killCommand) { killStatus, killOutput ->
-            if (killStatus.contains("Failed")) {
-                updateStatus(killStatus, killOutput)
+    suspend fun sendFileToServer(fileName: String): Boolean {
+        // Заглушка для отправки файла на сервер
+        delay(2000) // Имитация задержки сети
+        return Math.random() < 0.8 // 80% шанс успеха
+    }
+
+    suspend fun getFileStatus(fileName: String): String {
+        // Заглушка для получения статуса файла с сервера
+        delay(1000) // Имитация задержки сети
+        return listOf("Processing", "Completed", "Failed").random()
+    }
+
+    fun runKillAndStartMonitorMode(updateStatus: (String, String) -> Unit) {
+        val commands = listOf(
+            "airmon-ng check kill",
+            "ip link set wlan0 down",
+            "iw dev wlan0 set type monitor",
+            "ip link set wlan0 up",
+            "airmon-ng start wlan0",
+            "iw dev wlan0 info"
+        )
+
+        executeCommandsSequentially(commands, updateStatus)
+    }
+
+    fun startManagedMode(updateStatus: (String, String) -> Unit) {
+        val commands = listOf(
+            "killall airodump-ng",
+            "airmon-ng stop wlan0",
+            "ip link set wlan0 down",
+            "iw dev wlan0 set type managed",
+            "ip link set wlan0 up",
+            "service networking restart",
+            "wpa_supplicant -B -i wlan0 -D nl80211,wext"
+        )
+
+        executeCommandsSequentially(commands, updateStatus)
+    }
+
+    private fun executeCommandsSequentially(commands: List<String>, updateStatus: (String, String) -> Unit) {
+        if (commands.isEmpty()) {
+            updateStatus("Status: Completed", "All commands executed successfully")
+            return
+        }
+
+        val command = commands.first()
+        val fullCommand = "$CHROOT_PATH $command'"
+
+        executeCommand(fullCommand) { status, output ->
+            if (status.contains("Failed")) {
+                updateStatus(status, output)
             } else {
-                executeCommand(startMonitorModeCommand, updateStatus)
+                updateStatus(status, output)
+                executeCommandsSequentially(commands.drop(1), updateStatus)
             }
         }
     }
@@ -48,7 +101,7 @@ object DataManager {
 
     fun stopAirodump(updateStatus: (String, String) -> Unit) {
         updateStatus("Status: Stopping Airodump-ng", "")
-        val stopCommand = "killall -9 airodump-ng"
+        val stopCommand = "pkill airodump-ng"
         val fullCommand = "$CHROOT_PATH $stopCommand'"
 
         executeCommand(fullCommand) { status, output ->
@@ -61,9 +114,40 @@ object DataManager {
         }
     }
 
+    fun startNetworkMonitoring(network: Network, updateStatus: (String, String) -> Unit) {
+        val bssid = network.bssid
+        val channel = network.channel
+        val captureFile = "$CAPTIONS_DIR$bssid"
+        val deleteFilesCommand = "rm -f $captureFile*"
+        val command = "airodump-ng --bssid $bssid -c $channel -w $captureFile wlan0"
+        val fullCommand = "$CHROOT_PATH $deleteFilesCommand && $command'"
+
+        updateStatus("Status: Starting Monitoring", "")
+        try {
+            Runtime.getRuntime().exec(arrayOf("su", "-c", fullCommand))
+            updateStatus("Status: Monitoring Running", "Monitoring has started for BSSID: $bssid")
+        } catch (e: IOException) {
+            Log.e("DataManager", "Failed to start monitoring for BSSID: $bssid", e)
+            updateStatus("Status: Failed to start monitoring", e.message ?: "")
+        }
+    }
+
+    fun stopNetworkMonitoring(network: Network, updateStatus: (String, String) -> Unit) {
+        val bssid = network.bssid
+        val captureFile = "$CAPTIONS_DIR$bssid-01.cap"
+        val handshakeFile = "$HANDSHAKES_DIR$bssid.cap"
+        val stopCommand = "pkill airodump-ng"
+        val cleanCommand = "wpaclean $handshakeFile $captureFile"
+        val fullCommand = "$CHROOT_PATH $stopCommand && $cleanCommand'"
+
+        updateStatus("Status: Stopping Monitoring", "")
+        executeCommand(fullCommand, updateStatus)
+    }
+
     fun readAirodumpFile(): List<Network> {
         val outputFile = File("/data/local/nhsystem/kali-arm64/output-01.csv")
         return if (outputFile.exists()) {
+            Log.d("DataManager", "readAirodumpFile: \n" + parseCsvFile(outputFile))
             parseCsvFile(outputFile)
         } else {
             Log.w("DataManager", "Output file not found")
