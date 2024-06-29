@@ -56,9 +56,8 @@ fun CapturedFilesScreen() {
             },
             onSendClick = { file ->
                 scope.launch {
-                    // В реальном приложении вы должны получить BSSID и SSID из файла или от пользователя
-                    val bssid = "00:11:22:33:44:55" // пример
-                    val ssid = "ExampleNetwork" // пример
+                    val bssid = "00:11:22:33:44:55"
+                    val ssid = "ExampleNetwork"
 
                     file.status = "Sending"
                     files = files.map { if (it.fileName == file.fileName) file else it }
@@ -67,7 +66,6 @@ fun CapturedFilesScreen() {
                         file.status = if (success) "Sent" else "Failed to send"
                         files = files.map { if (it.fileName == file.fileName) file else it }
 
-                        // Здесь вы можете добавить логику для отображения сообщения пользователю
                         Log.d("CapturedFilesScreen", message)
                     }
                 }
