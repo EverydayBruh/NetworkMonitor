@@ -1,5 +1,6 @@
 package com.example.networkmonitor
 
+import android.util.Log
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -9,17 +10,14 @@ import com.example.networkmonitor.adapters.CapturedFileList
 import com.example.networkmonitor.models.CapturedFile
 import com.example.networkmonitor.data.DataManager
 import kotlinx.coroutines.launch
-import java.io.File
 
 @Composable
 fun CapturedFilesScreen() {
     var files by remember { mutableStateOf(listOf<CapturedFile>()) }
-    val coroutineScope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
-        loadCapturedFiles { newFiles ->
-            files = newFiles
-        }
+        files = DataManager.loadCapturedFiles()
     }
 
     Column(
@@ -34,61 +32,46 @@ fun CapturedFilesScreen() {
         CapturedFileList(
             files = files,
             onFileClick = { file ->
-                // Логика при клике на файл (например, показать детали)
+                scope.launch {
+                    DataManager.checkFileStatus(file) { status, details ->
+                        val updatedFile = when (status) {
+                            "in_process" -> file.copy(
+                                status = "In Process (${details["progress"]}%)",
+                                queuePosition = -1
+                            )
+                            "queued" -> file.copy(
+                                status = "Queued",
+                                queuePosition = details["position"] as Int
+                            )
+                            "processed" -> file.copy(
+                                status = if (details["success"] as Boolean) "Cracked" else "Failed",
+                                queuePosition = -1
+                            )
+                            "not_found" -> file.copy(status = "Not Found", queuePosition = -1)
+                            else -> file.copy(status = "Error", queuePosition = -1)
+                        }
+                        files = files.map { if (it.fileName == file.fileName) updatedFile else it }
+                    }
+                }
             },
             onSendClick = { file ->
-                coroutineScope.launch {
-                    sendFileToServer(file) { updatedFiles ->
-                        files = updatedFiles
+                scope.launch {
+                    // В реальном приложении вы должны получить BSSID и SSID из файла или от пользователя
+                    val bssid = "00:11:22:33:44:55" // пример
+                    val ssid = "ExampleNetwork" // пример
+
+                    file.status = "Sending"
+                    files = files.map { if (it.fileName == file.fileName) file else it }
+
+                    DataManager.sendFileToServer(file, bssid, ssid) { success, message ->
+                        file.status = if (success) "Sent" else "Failed to send"
+                        files = files.map { if (it.fileName == file.fileName) file else it }
+
+                        // Здесь вы можете добавить логику для отображения сообщения пользователю
+                        Log.d("CapturedFilesScreen", message)
                     }
                 }
             }
         )
-    }
-}
-
-private suspend fun loadCapturedFiles(
-    updateFiles: (List<CapturedFile>) -> Unit
-) {
-    val capturedFiles = DataManager.getCapturedFiles()
-    val newFiles = capturedFiles.map { file ->
-        CapturedFile(
-            fileName = file.name,
-            status = "Pending",
-            queuePosition = -1
-        )
-    }
-    updateFiles(newFiles)
-}
-
-private suspend fun sendFileToServer(
-    file: CapturedFile,
-    updateFiles: (List<CapturedFile>) -> Unit
-) {
-    file.status = "Sending"
-    updateFiles { currentFiles ->
-        currentFiles.map { if (it == file) file.copy(status = "Sending") else it }
-    }
-
-    // Заглушка для отправки файла на сервер
-    val result = DataManager.sendFileToServer(file.fileName)
-
-    file.status = if (result) "Sent" else "Failed"
-    updateFiles { currentFiles ->
-        currentFiles.map { if (it == file) file else it }
-    }
-
-    // Заглушка для запроса статуса от сервера
-    updateFileStatus(file, updateFiles)
-}
-
-private suspend fun updateFileStatus(
-    file: CapturedFile,
-    updateFiles: (List<CapturedFile>) -> Unit
-) {
-    val status = DataManager.getFileStatus(file.fileName)
-    file.status = status
-    updateFiles { currentFiles ->
-        currentFiles.map { if (it == file) file.copy(status = status) else it }
     }
 }

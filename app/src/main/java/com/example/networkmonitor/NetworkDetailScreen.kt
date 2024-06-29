@@ -59,6 +59,19 @@ fun NetworkDetailScreen(navController: NavHostController, backStackEntry: NavBac
                 Text(if (isMonitoring) "Stop Monitoring" else "Start Monitoring")
             }
 
+            Button(
+                onClick = {
+                    DataManager.deauthenticate(it) { newStatus, newOutput ->
+                        status = newStatus
+                        output = newOutput
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            ) {
+                Text("Deauthenticate")
+            }
+
+
             Text(
                 text = status,
                 modifier = Modifier.padding(top = 16.dp)
